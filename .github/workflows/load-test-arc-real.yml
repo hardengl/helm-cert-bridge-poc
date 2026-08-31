@@ -1,0 +1,113 @@
+name: "Load Test: ARC — Real Chart Verification"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: helm-cert
+    strategy:
+      matrix:
+        include:
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/castai-castai-agent-0.52.0/castai-agent-0.52.0.tgz"
+            name: "castai-agent"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/hashicorp-vault-0.12.0/hashicorp-vault-0.12.0.tgz"
+            name: "vault"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/wavefronthq-wavefront-1.7.10/wavefront-1.7.10.tgz"
+            name: "wavefront"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/lacework-lacework-agent-5.4.1/lacework-agent-5.4.1.tgz"
+            name: "lacework-agent"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/catalogicsoftware-cloudcasa-3.4.3/cloudcasa-3.4.3.tgz"
+            name: "cloudcasa"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/dh2i-dxemssql-1.0.1/dxemssql-1.0.1.tgz"
+            name: "dxemssql"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/enclaive-vhsm-0.29.0/vhsm-0.29.0.tgz"
+            name: "vhsm"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/kubesense-kubesense-1.0.0/kubesense-1.0.0.tgz"
+            name: "kubesense"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/expanso-expanso-edge-2.1.7/expanso-edge-2.1.7.tgz"
+            name: "expanso-edge"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/zte-kite-agent-1.0.0/kite-agent-1.0.0.tgz"
+            name: "kite-agent"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/stclab-inc-wave-autoscale-helm-3.0.1/wave-autoscale-helm-3.0.1.tgz"
+            name: "wave-autoscale"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/nabstract-nef-nabstract-1.1.0/nef-nabstract-1.1.0.tgz"
+            name: "nef-nabstract"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/telenity-smsf-momt-1.0.4/smsf-momt-1.0.4.tgz"
+            name: "smsf-momt"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/telenity-canvas-platform-3.1.5/canvas-platform-3.1.5.tgz"
+            name: "canvas-platform"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/telenity-ussigw-core-1.0.4/ussigw-core-1.0.4.tgz"
+            name: "ussigw-core"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/telenity-smsf-registration-1.0.4/smsf-registration-1.0.4.tgz"
+            name: "smsf-registration"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/telenity-canvas-oamportal-3.0.24-SNAPSHOT/canvas-oamportal-3.0.24-SNAPSHOT.tgz"
+            name: "canvas-oamportal"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/exfo-uv-helm-0.1.3/exfo-uv-helm-0.1.3.tgz"
+            name: "uv-helm"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/embedded-jamaibase-0.1.0/jamaibase-0.1.0.tgz"
+            name: "jamaibase"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/solace-pubsubplus-openshift-ha-3.0.0/pubsubplus-openshift-ha-3.0.0.tgz"
+            name: "pubsubplus-ha"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/confluentinc-cp-cmf-0.0.1/cp-cmf-0.0.1.tgz"
+            name: "cp-cmf"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/kovair-kovairdevops-helm-0.1.0/kovairdevops-helm-0.1.0.tgz"
+            name: "kovairdevops"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/alquimiaai-alquimia-runtime-helm-0.1.0/alquimia-runtime-helm-0.1.0.tgz"
+            name: "alquimia-runtime"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/alquimiaai-alquimia-studio-0.1.0/alquimia-studio-0.1.0.tgz"
+            name: "alquimia-studio"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/itrs-analytics-iax-operator-crd-rh-2.17.11/iax-operator-crd-rh-2.17.11.tgz"
+            name: "iax-operator-crd"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/akeyless-akeyless-api-gateway-1.41.2/akeyless-api-gateway-1.41.2.tgz"
+            name: "akeyless-api-gw"
+          - chart: "https://a10networks.github.io/tkc-doc/charts/a10tkc-0.2.0.tgz"
+            name: "a10tkc"
+          - chart: "https://charts.yugabyte.com/yugaware-openshift-2.14.4.tgz"
+            name: "yugaware"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/langgenius-dify-enterprise-3.9.6/dify-enterprise-3.9.6.tgz"
+            name: "dify-enterprise"
+          - chart: "https://github.com/openshift-helm-charts/charts/releases/download/appscode-kubestash-certified-v2026.1.8-rc.0/kubestash-certified-v2026.1.8-rc.0.tgz"
+            name: "kubestash"
+      fail-fast: false
+    steps:
+      - name: "Verify ${{ matrix.name }}"
+        run: |
+          START=$(date +%s)
+          echo "=== Real Chart Verification: ${{ matrix.name }} ==="
+          echo "Chart URL: ${{ matrix.chart }}"
+          echo "Runner: $(hostname)"
+          echo "Started: $(date -u)"
+          echo ""
+
+          echo "[1/3] Running chart-verifier (non-cluster checks)..."
+          chart-verifier verify \
+            --set profile.vendorType=partner \
+            --disable chart-testing \
+            "${{ matrix.chart }}" 2>&1 || true
+
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+
+          echo ""
+          echo "=== ${{ matrix.name }} completed in ${ELAPSED}s ==="
+
+  summary:
+    needs: verify
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Summarize
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Real Chart Verification Load Test Summary ==="
+          JOBS=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
+            --jq '.jobs[] | select(.name | startswith("verify")) | "\(.conclusion) \(.name)"')
+          TOTAL=$(echo "$JOBS" | wc -l)
+          PASSED=$(echo "$JOBS" | grep -c "^success" || true)
+          FAILED=$(echo "$JOBS" | grep -c "^failure" || true)
+          echo "Total: $TOTAL | Passed: $PASSED | Failed: $FAILED"
+          echo ""
+          echo "Per-chart results:"
+          echo "$JOBS" | sort

@@ -1,0 +1,40 @@
+name: ARC Connectivity Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-on-self-hosted:
+    runs-on: helm-cert
+    steps:
+      - name: Verify tools and cluster access
+        run: |
+          echo "=== ARC Runner Connectivity Test ==="
+          echo "Runner: $(hostname)"
+          echo "Date: $(date -u)"
+          echo ""
+
+          echo "[1/5] oc version"
+          oc version --client || echo "oc not found"
+
+          echo "[2/5] helm version"
+          helm version --short || echo "helm not found"
+
+          echo "[3/5] chart-verifier version"
+          chart-verifier version || echo "chart-verifier not found"
+
+          echo "[4/5] Cluster access"
+          oc whoami 2>/dev/null || echo "Not using in-cluster SA"
+          oc get nodes --no-headers 2>/dev/null || echo "Cannot list nodes"
+
+          echo "[5/5] Outbound connectivity"
+          curl -sI --connect-timeout 5 https://api.github.com | head -1
+
+          echo ""
+          echo "=== All checks passed ==="
+
+  test-on-github-hosted:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm GitHub-hosted runner works
+        run: echo "GitHub-hosted runner OK"

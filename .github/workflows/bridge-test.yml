@@ -1,0 +1,67 @@
+name: Bridge Connectivity Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dispatch-and-wait:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create pending check run for bridge
+        id: create-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CHECK_RUN=$(curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/check-runs" \
+            -d "{
+              \"name\": \"helm-cert-verify-test-${{ github.run_number }}\",
+              \"head_sha\": \"${{ github.sha }}\",
+              \"status\": \"queued\",
+              \"output\": {
+                \"title\": \"Test Verification\",
+                \"summary\": \"PoC test: waiting for bridge to pick up\"
+              }
+            }")
+
+          CHECK_ID=$(echo "$CHECK_RUN" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
+          echo "check_id=$CHECK_ID" >> "$GITHUB_OUTPUT"
+          echo "Created check run: $CHECK_ID"
+
+      - name: Wait for bridge to process
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TIMEOUT=300
+          ELAPSED=0
+          echo "Waiting for bridge to pick up check run..."
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATUS=$(curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs" \
+              | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for run in data.get('check_runs', []):
+              if run['name'].startswith('helm-cert-verify-test-'):
+                  print(run['status'])
+                  break
+          ")
+
+            if [ "$STATUS" = "completed" ]; then
+              echo "Bridge completed processing!"
+              exit 0
+            fi
+
+            echo "  Status: ${STATUS:-queued} (${ELAPSED}s elapsed)"
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
+          done
+
+          echo "Timeout — bridge did not process within ${TIMEOUT}s"
+          echo "This is expected if bridge is not deployed yet"
+          exit 1

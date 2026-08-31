@@ -1,0 +1,96 @@
+name: "E2E: ARC — Chart Testing (Helm Install)"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  chart-testing:
+    runs-on: helm-cert
+    steps:
+      - name: "Create a minimal valid chart"
+        run: |
+          mkdir -p /tmp/test-chart/templates
+          
+          cat > /tmp/test-chart/Chart.yaml << 'EOF'
+          apiVersion: v2
+          name: poc-test-chart
+          version: 0.1.0
+          description: Minimal chart for chart-testing validation
+          type: application
+          kubeVersion: ">=1.20.0"
+          EOF
+          
+          cat > /tmp/test-chart/values.yaml << 'EOF'
+          replicaCount: 1
+          image:
+            repository: registry.access.redhat.com/ubi9/ubi-minimal
+            tag: latest
+            pullPolicy: IfNotPresent
+          EOF
+          
+          cat > /tmp/test-chart/templates/deployment.yaml << 'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: {{ .Release.Name }}-app
+            labels:
+              app: {{ .Release.Name }}
+          spec:
+            replicas: {{ .Values.replicaCount }}
+            selector:
+              matchLabels:
+                app: {{ .Release.Name }}
+            template:
+              metadata:
+                labels:
+                  app: {{ .Release.Name }}
+              spec:
+                containers:
+                - name: app
+                  image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                  command: ["sleep", "infinity"]
+          EOF
+          
+          cat > /tmp/test-chart/README.md << 'EOF'
+          # PoC Test Chart
+          Minimal chart to validate chart-testing functionality.
+          EOF
+
+      - name: "Create test namespace"
+        run: |
+          NS="chart-test-arc-$(date +%s)"
+          echo "CHART_NS=$NS" >> $GITHUB_ENV
+          oc new-project $NS || oc create namespace $NS
+          echo "Created namespace: $NS"
+
+      - name: "Run chart-verifier WITH chart-testing"
+        run: |
+          echo "=== chart-verifier WITH chart-testing ==="
+          echo "Namespace: $CHART_NS"
+          
+          helm package /tmp/test-chart -d /tmp/ 2>&1
+          
+          chart-verifier verify \
+            --set profile.vendorType=partner \
+            --namespace "$CHART_NS" \
+            /tmp/poc-test-chart-0.1.0.tgz 2>&1 || echo "CHART_VERIFIER_FAILED=true" >> $GITHUB_ENV
+          
+          echo ""
+          echo "=== Checking what was installed ==="
+          oc get all -n "$CHART_NS" 2>&1 || true
+
+      - name: "Cleanup namespace"
+        if: always()
+        run: |
+          if [ -n "$CHART_NS" ]; then
+            oc delete namespace "$CHART_NS" --wait=false 2>&1 || true
+            echo "Namespace $CHART_NS deletion initiated"
+          fi
+
+      - name: "Report result"
+        run: |
+          if [ "${CHART_VERIFIER_FAILED}" = "true" ]; then
+            echo "::error::chart-verifier with chart-testing FAILED"
+            exit 1
+          fi
+          echo "chart-verifier with chart-testing PASSED"

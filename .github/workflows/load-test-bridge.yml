@@ -1,0 +1,94 @@
+name: "Load Test: Bridge (30 concurrent)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Number of concurrent check runs to create"
+        default: "30"
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  create-check-runs:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create ${{ inputs.count || '30' }} queued check runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COUNT: ${{ inputs.count || '30' }}
+        run: |
+          echo "=== Bridge Load Test: Creating ${COUNT} check runs ==="
+          TIMESTAMP=$(date +%s)
+
+          for i in $(seq 1 "$COUNT"); do
+            curl -s -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/check-runs" \
+              -d "{
+                \"name\": \"helm-cert-verify-load-${TIMESTAMP}-${i}\",
+                \"head_sha\": \"${{ github.sha }}\",
+                \"status\": \"queued\",
+                \"output\": {
+                  \"title\": \"Load Test ${i}/${COUNT}\",
+                  \"summary\": \"Stress test submission ${i}\"
+                }
+              }" -o /dev/null -w "[${i}/${COUNT}] HTTP %{http_code}\n" &
+
+            # Stagger to avoid rate limits
+            if (( i % 10 == 0 )); then
+              sleep 1
+            fi
+          done
+
+          wait
+          echo ""
+          echo "All ${COUNT} check runs created. Bridge should pick them up."
+
+      - name: Wait for bridge to process all check runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COUNT: ${{ inputs.count || '30' }}
+        run: |
+          TIMEOUT=600
+          ELAPSED=0
+          echo "Waiting for bridge to process ${COUNT} check runs..."
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATS=$(curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?per_page=100" \
+              | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          runs = [r for r in data.get('check_runs', []) if r['name'].startswith('helm-cert-verify-load-')]
+          queued = sum(1 for r in runs if r['status'] == 'queued')
+          in_progress = sum(1 for r in runs if r['status'] == 'in_progress')
+          completed = sum(1 for r in runs if r['status'] == 'completed')
+          succeeded = sum(1 for r in runs if r.get('conclusion') == 'success')
+          failed = sum(1 for r in runs if r.get('conclusion') == 'failure')
+          print(f'{len(runs)} total | {queued} queued | {in_progress} in_progress | {completed} completed ({succeeded} pass, {failed} fail)')
+          ")
+
+            echo "  [${ELAPSED}s] ${STATS}"
+
+            COMPLETED_COUNT=$(echo "$STATS" | grep -oP '\d+ completed' | grep -oP '\d+')
+            if [ "${COMPLETED_COUNT:-0}" -ge "$COUNT" ]; then
+              echo ""
+              echo "=== All ${COUNT} check runs processed by bridge ==="
+              echo "Final: ${STATS}"
+              exit 0
+            fi
+
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
+          done
+
+          echo "Timeout after ${TIMEOUT}s"
+          echo "Final: ${STATS}"
+          exit 1

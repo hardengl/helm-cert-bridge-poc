@@ -1,0 +1,68 @@
+name: "Load Test: ARC (30 concurrent)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Number of concurrent jobs"
+        default: "30"
+        type: string
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          COUNT=${{ inputs.count || '30' }}
+          MATRIX=$(python3 -c "import json; print(json.dumps({'job': list(range(1, int('$COUNT')+1))}))")
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Will run $COUNT concurrent jobs"
+
+  verify:
+    needs: generate-matrix
+    runs-on: helm-cert
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: "Job ${{ matrix.job }}: Verify tools and cluster"
+        run: |
+          START=$(date +%s%N)
+          echo "=== Load Test Job ${{ matrix.job }}/${{ inputs.count || '30' }} ==="
+          echo "Runner: $(hostname)"
+          echo "Started: $(date -u)"
+          echo ""
+
+          oc version --client | head -1
+          helm version --short
+          chart-verifier version
+          oc whoami
+
+          # Simulate real chart-verifier workload (~5-10s)
+          sleep $(( (RANDOM % 6) + 5 ))
+
+          END=$(date +%s%N)
+          ELAPSED=$(( (END - START) / 1000000 ))
+          echo ""
+          echo "=== Job ${{ matrix.job }} completed in ${ELAPSED}ms ==="
+
+  summary:
+    needs: verify
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Summarize results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== ARC Load Test Summary ==="
+          JOBS=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs --paginate --jq '.jobs[] | select(.name | startswith("verify")) | "\(.name) \(.conclusion) \(.started_at) \(.completed_at)"')
+          TOTAL=$(echo "$JOBS" | wc -l)
+          PASSED=$(echo "$JOBS" | grep -c "success" || true)
+          FAILED=$(echo "$JOBS" | grep -c "failure" || true)
+          echo "Total jobs: $TOTAL"
+          echo "Passed: $PASSED"
+          echo "Failed: $FAILED"

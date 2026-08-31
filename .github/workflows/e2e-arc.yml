@@ -1,0 +1,43 @@
+name: "E2E: ARC — Real Chart Verification"
+
+on:
+  workflow_dispatch:
+    inputs:
+      chart_url:
+        description: "Helm chart URL to verify"
+        default: "https://github.com/openshift-helm-charts/charts/releases/download/hashicorp-vault-0.12.0/hashicorp-vault-0.12.0.tgz"
+      chart_name:
+        description: "Chart name (for display)"
+        default: "vault"
+
+jobs:
+  verify:
+    runs-on: helm-cert
+    steps:
+      - name: "Verify ${{ inputs.chart_name }}"
+        run: |
+          echo "=== E2E: ARC Chart Verification ==="
+          echo "Chart: ${{ inputs.chart_name }}"
+          echo "URL: ${{ inputs.chart_url }}"
+          echo "Runner: $(hostname)"
+          echo "Date: $(date -u)"
+          echo ""
+
+          echo "[1/4] oc connectivity"
+          oc whoami
+          oc version --client | head -1
+
+          echo ""
+          echo "[2/4] helm version"
+          helm version --short
+
+          echo ""
+          echo "[3/4] chart-verifier verify"
+          chart-verifier verify \
+            --set profile.vendorType=partner \
+            --disable chart-testing \
+            "${{ inputs.chart_url }}" 2>&1
+
+          echo ""
+          echo "[4/4] Done"
+          echo "=== E2E PASSED ==="

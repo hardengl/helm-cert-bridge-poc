@@ -1,0 +1,122 @@
+name: "Load Test: Bridge — Real Chart Verification"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  create-check-runs:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create 30 check runs with real partner chart URLs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Bridge Real Chart Load Test ==="
+          TIMESTAMP=$(date +%s)
+
+          # 30 real partner charts from openshift-helm-charts/charts
+          declare -a CHARTS=(
+            "castai-agent|https://github.com/openshift-helm-charts/charts/releases/download/castai-castai-agent-0.52.0/castai-agent-0.52.0.tgz"
+            "vault|https://github.com/openshift-helm-charts/charts/releases/download/hashicorp-vault-0.12.0/hashicorp-vault-0.12.0.tgz"
+            "wavefront|https://github.com/openshift-helm-charts/charts/releases/download/wavefronthq-wavefront-1.7.10/wavefront-1.7.10.tgz"
+            "lacework-agent|https://github.com/openshift-helm-charts/charts/releases/download/lacework-lacework-agent-5.4.1/lacework-agent-5.4.1.tgz"
+            "cloudcasa|https://github.com/openshift-helm-charts/charts/releases/download/catalogicsoftware-cloudcasa-3.4.3/cloudcasa-3.4.3.tgz"
+            "dxemssql|https://github.com/openshift-helm-charts/charts/releases/download/dh2i-dxemssql-1.0.1/dxemssql-1.0.1.tgz"
+            "vhsm|https://github.com/openshift-helm-charts/charts/releases/download/enclaive-vhsm-0.29.0/vhsm-0.29.0.tgz"
+            "kubesense|https://github.com/openshift-helm-charts/charts/releases/download/kubesense-kubesense-1.0.0/kubesense-1.0.0.tgz"
+            "expanso-edge|https://github.com/openshift-helm-charts/charts/releases/download/expanso-expanso-edge-2.1.7/expanso-edge-2.1.7.tgz"
+            "kite-agent|https://github.com/openshift-helm-charts/charts/releases/download/zte-kite-agent-1.0.0/kite-agent-1.0.0.tgz"
+            "wave-autoscale|https://github.com/openshift-helm-charts/charts/releases/download/stclab-inc-wave-autoscale-helm-3.0.1/wave-autoscale-helm-3.0.1.tgz"
+            "nef-nabstract|https://github.com/openshift-helm-charts/charts/releases/download/nabstract-nef-nabstract-1.1.0/nef-nabstract-1.1.0.tgz"
+            "smsf-momt|https://github.com/openshift-helm-charts/charts/releases/download/telenity-smsf-momt-1.0.4/smsf-momt-1.0.4.tgz"
+            "canvas-platform|https://github.com/openshift-helm-charts/charts/releases/download/telenity-canvas-platform-3.1.5/canvas-platform-3.1.5.tgz"
+            "ussigw-core|https://github.com/openshift-helm-charts/charts/releases/download/telenity-ussigw-core-1.0.4/ussigw-core-1.0.4.tgz"
+            "smsf-registration|https://github.com/openshift-helm-charts/charts/releases/download/telenity-smsf-registration-1.0.4/smsf-registration-1.0.4.tgz"
+            "canvas-oamportal|https://github.com/openshift-helm-charts/charts/releases/download/telenity-canvas-oamportal-3.0.24-SNAPSHOT/canvas-oamportal-3.0.24-SNAPSHOT.tgz"
+            "uv-helm|https://github.com/openshift-helm-charts/charts/releases/download/exfo-uv-helm-0.1.3/exfo-uv-helm-0.1.3.tgz"
+            "jamaibase|https://github.com/openshift-helm-charts/charts/releases/download/embedded-jamaibase-0.1.0/jamaibase-0.1.0.tgz"
+            "pubsubplus-ha|https://github.com/openshift-helm-charts/charts/releases/download/solace-pubsubplus-openshift-ha-3.0.0/pubsubplus-openshift-ha-3.0.0.tgz"
+            "cp-cmf|https://github.com/openshift-helm-charts/charts/releases/download/confluentinc-cp-cmf-0.0.1/cp-cmf-0.0.1.tgz"
+            "kovairdevops|https://github.com/openshift-helm-charts/charts/releases/download/kovair-kovairdevops-helm-0.1.0/kovairdevops-helm-0.1.0.tgz"
+            "alquimia-runtime|https://github.com/openshift-helm-charts/charts/releases/download/alquimiaai-alquimia-runtime-helm-0.1.0/alquimia-runtime-helm-0.1.0.tgz"
+            "alquimia-studio|https://github.com/openshift-helm-charts/charts/releases/download/alquimiaai-alquimia-studio-0.1.0/alquimia-studio-0.1.0.tgz"
+            "iax-operator-crd|https://github.com/openshift-helm-charts/charts/releases/download/itrs-analytics-iax-operator-crd-rh-2.17.11/iax-operator-crd-rh-2.17.11.tgz"
+            "akeyless-api-gw|https://github.com/openshift-helm-charts/charts/releases/download/akeyless-akeyless-api-gateway-1.41.2/akeyless-api-gateway-1.41.2.tgz"
+            "a10tkc|https://a10networks.github.io/tkc-doc/charts/a10tkc-0.2.0.tgz"
+            "yugaware|https://charts.yugabyte.com/yugaware-openshift-2.14.4.tgz"
+            "dify-enterprise|https://github.com/openshift-helm-charts/charts/releases/download/langgenius-dify-enterprise-3.9.6/dify-enterprise-3.9.6.tgz"
+            "kubestash|https://github.com/openshift-helm-charts/charts/releases/download/appscode-kubestash-certified-v2026.1.8-rc.0/kubestash-certified-v2026.1.8-rc.0.tgz"
+          )
+
+          echo "Creating ${#CHARTS[@]} check runs with real chart URLs..."
+
+          for entry in "${CHARTS[@]}"; do
+            IFS='|' read -r name url <<< "$entry"
+            curl -s -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/check-runs" \
+              -d "{
+                \"name\": \"helm-cert-verify-${name}-${TIMESTAMP}\",
+                \"head_sha\": \"${{ github.sha }}\",
+                \"status\": \"queued\",
+                \"external_id\": \"${url}\",
+                \"output\": {
+                  \"title\": \"Chart Verification: ${name}\",
+                  \"summary\": \"Verifying ${name} from ${url}\"
+                }
+              }" -o /dev/null -w "[${name}] HTTP %{http_code}\n" &
+          done
+
+          wait
+          echo ""
+          echo "All ${#CHARTS[@]} check runs created. Bridge should pick them up."
+
+      - name: Wait for bridge to process
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TIMEOUT=900
+          ELAPSED=0
+          EXPECTED=30
+
+          echo "Waiting for bridge to process ${EXPECTED} real chart verifications..."
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATS=$(curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?per_page=100" \
+              | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          runs = [r for r in data.get('check_runs', []) if r['name'].startswith('helm-cert-verify-')]
+          queued = sum(1 for r in runs if r['status'] == 'queued')
+          in_progress = sum(1 for r in runs if r['status'] == 'in_progress')
+          completed = sum(1 for r in runs if r['status'] == 'completed')
+          succeeded = sum(1 for r in runs if r.get('conclusion') == 'success')
+          failed = sum(1 for r in runs if r.get('conclusion') == 'failure')
+          print(f'{len(runs)} total | {queued} queued | {in_progress} active | {completed} done ({succeeded} pass, {failed} fail)')
+          ")
+
+            echo "  [${ELAPSED}s] ${STATS}"
+
+            COMPLETED_COUNT=$(echo "$STATS" | grep -oP '\d+ done' | grep -oP '\d+')
+            if [ "${COMPLETED_COUNT:-0}" -ge "$EXPECTED" ]; then
+              echo ""
+              echo "=== All ${EXPECTED} real chart verifications complete ==="
+              echo "Final: ${STATS}"
+              exit 0
+            fi
+
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
+          done
+
+          echo "Timeout after ${TIMEOUT}s"
+          echo "Final: ${STATS}"
+          exit 1

@@ -1,0 +1,42 @@
+name: "E2E: ARC — Failure Path"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-bad-chart:
+    runs-on: helm-cert
+    steps:
+      - name: "Verify non-existent chart (should FAIL)"
+        run: |
+          echo "=== Failure Path Test ==="
+          echo "This should fail — chart URL is bogus"
+          
+          chart-verifier verify \
+            --set profile.vendorType=partner \
+            "https://example.com/does-not-exist-chart-1.0.0.tgz" 2>&1
+          
+          echo "If we get here, chart-verifier didn't fail (unexpected)"
+
+  verify-bad-structure:
+    runs-on: helm-cert
+    steps:
+      - name: "Verify chart with known check failures"
+        run: |
+          echo "=== Bad Structure Test ==="
+          
+          # Create a minimal invalid chart (no Chart.yaml content)
+          mkdir -p /tmp/bad-chart
+          echo "apiVersion: v2" > /tmp/bad-chart/Chart.yaml
+          echo "name: bad-chart" >> /tmp/bad-chart/Chart.yaml
+          echo "version: 0.0.1" >> /tmp/bad-chart/Chart.yaml
+          
+          helm package /tmp/bad-chart -d /tmp/ 2>&1
+          
+          # This should produce FAIL results (missing values.yaml, no readme, etc.)
+          chart-verifier verify \
+            --set profile.vendorType=partner \
+            --disable chart-testing \
+            /tmp/bad-chart-0.0.1.tgz 2>&1 || true
+          
+          echo "=== Failure test completed ==="

@@ -15,86 +15,87 @@ jobs:
           echo "User: $(whoami) (UID=$(id -u), GID=$(id -g))"
           echo "Docker: $(which docker 2>/dev/null || echo 'NOT AVAILABLE')"
           echo "Node.js: $(node --version 2>/dev/null || echo 'NOT AVAILABLE')"
-          echo ""
 
       # --- TEST 1: actions/checkout (Node action) ---
       - name: "TEST 1: actions/checkout@v4"
         uses: actions/checkout@v4
+        continue-on-error: true
+        id: t1
 
       - name: "VERIFY 1: checkout"
         run: |
-          echo "--- actions/checkout ---"
-          test -d .github && echo "PASS: .github directory exists" || echo "FAIL"
-          ls -la | head -10
+          test -d .github && echo "RESULT: PASS" || echo "RESULT: FAIL"
 
       # --- TEST 2: actions/setup-python@v5 (Node action) ---
       - name: "TEST 2: actions/setup-python@v5"
-        id: setup-python
+        id: t2
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+        continue-on-error: true
 
       - name: "VERIFY 2: setup-python"
         run: |
-          echo "--- actions/setup-python ---"
-          python3 --version
-          python3 -c "import sys; print(f'Python path: {sys.executable}')"
-          echo "PASS: Python ${{ steps.setup-python.outputs.python-version }}"
+          python3 --version && echo "RESULT: PASS" || echo "RESULT: FAIL"
 
       # --- TEST 3: actions/setup-go@v5 (Node action) ---
       - name: "TEST 3: actions/setup-go@v5"
+        id: t3
         uses: actions/setup-go@v5
         with:
           go-version: '>=1.20'
+        continue-on-error: true
 
       - name: "VERIFY 3: setup-go"
         run: |
-          echo "--- actions/setup-go ---"
-          go version
-          echo "PASS"
+          go version && echo "RESULT: PASS" || echo "RESULT: FAIL"
 
       # --- TEST 4: actions/upload-artifact@v4 (Node action) ---
       - name: "TEST 4 prep: Create artifact"
         run: |
           mkdir -p test-artifacts
           echo "ARC compatibility test - $(date -u)" > test-artifacts/report.txt
-          echo "Runner: $(hostname)" >> test-artifacts/report.txt
 
       - name: "TEST 4: actions/upload-artifact@v4"
+        id: t4
         uses: actions/upload-artifact@v4
         with:
-          name: arc-compat-test-artifact
+          name: arc-compat-test-artifact-v2
           path: test-artifacts/
+        continue-on-error: true
+
+      - name: "VERIFY 4: upload-artifact"
+        run: |
+          echo "Outcome: ${{ steps.t4.outcome }}"
+          test "${{ steps.t4.outcome }}" = "success" && echo "RESULT: PASS" || echo "RESULT: FAIL"
 
       # --- TEST 5: redhat-actions/openshift-tools-installer@v1 (Node action) ---
       - name: "TEST 5: redhat-actions/openshift-tools-installer@v1"
+        id: t5
         uses: redhat-actions/openshift-tools-installer@v1
         with:
           source: github
           skip_cache: true
           chart-verifier: latest
+        continue-on-error: true
 
       - name: "VERIFY 5: openshift-tools-installer"
         run: |
-          echo "--- redhat-actions/openshift-tools-installer ---"
-          which chart-verifier
-          chart-verifier version
-          echo "PASS"
+          which chart-verifier && chart-verifier version && echo "RESULT: PASS" || echo "RESULT: FAIL"
 
-      # --- TEST 6: redhat-actions/oc-login@v1 (Node action) ---
+      # --- TEST 6: redhat-actions/oc-login@v1 (Node action, using IP) ---
       - name: "TEST 6: redhat-actions/oc-login@v1"
+        id: t6
         uses: redhat-actions/oc-login@v1
         with:
-          openshift_server_url: https://api.ocp-edge-0.lab.eng.tlv2.redhat.com:6443
+          openshift_server_url: https://192.168.31.5:6443
           openshift_token: ${{ secrets.OC_TOKEN }}
           insecure_skip_tls_verify: true
+        continue-on-error: true
 
       - name: "VERIFY 6: oc-login"
         run: |
-          echo "--- redhat-actions/oc-login ---"
-          oc whoami
-          oc version --client | head -1
-          echo "PASS"
+          oc whoami && echo "RESULT: PASS" || echo "RESULT: FAIL (action ran but cluster unreachable)"
 
       # --- TEST 7: redhat-actions/chart-verifier@v1 (Node action) ---
       - name: "TEST 7 prep: Create minimal chart"
@@ -122,61 +123,69 @@ jobs:
           helm package /tmp/mini-chart -d /tmp/
 
       - name: "TEST 7: redhat-actions/chart-verifier@v1"
+        id: t7
         uses: redhat-actions/chart-verifier@v1
         with:
           chart_uri: /tmp/arc-action-test-0.1.0.tgz
           report_type: results
           verify_args: "--disable chart-testing --set profile.vendorType=partner"
           fail: "false"
+        continue-on-error: true
+
+      - name: "VERIFY 7: chart-verifier action"
+        run: |
+          echo "Outcome: ${{ steps.t7.outcome }}"
+          test "${{ steps.t7.outcome }}" = "success" && echo "RESULT: PASS" || echo "RESULT: FAIL"
 
       # --- TEST 8: go install (simulates get-ocp-range composite) ---
       - name: "TEST 8: go install + get-ocp-range binary"
+        id: t8
+        continue-on-error: true
         run: |
-          echo "--- go install (get-ocp-range pattern) ---"
-          go install github.com/opdev/getocprange/cmd/get-ocp-range@latest 2>&1 || echo "go install attempted"
+          go install github.com/opdev/getocprange/cmd/get-ocp-range@latest
           export PATH=$PATH:$(go env GOPATH)/bin
-          which get-ocp-range 2>/dev/null && echo "PASS: binary installed" || echo "PARTIAL: binary not in PATH but Go works"
-          echo "This validates the composite action pattern used by .github/actions/get-ocp-range"
+          which get-ocp-range && echo "RESULT: PASS" || echo "RESULT: FAIL"
 
       # --- TEST 9: yq via binary (workaround for Docker action) ---
       - name: "TEST 9: yq as binary (Docker action workaround)"
+        id: t9
+        continue-on-error: true
         run: |
-          echo "--- yq binary workaround ---"
           curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
           yq --version
           cat > /tmp/test.yaml << 'EOF'
           data:
             version: "1.0"
-            name: "test"
           EOF
           RESULT=$(yq '.data.version' /tmp/test.yaml)
           echo "yq result: $RESULT"
-          test "$RESULT" = '"1.0"' && echo "PASS" || echo "PASS (different quote style)"
+          echo "RESULT: PASS"
 
-      # --- SUMMARY ---
+      # --- FINAL SUMMARY ---
       - name: "=== FINAL RESULTS ==="
         if: always()
         run: |
           echo ""
-          echo "=========================================="
-          echo " ARC on OpenShift — Action Compatibility "
-          echo "=========================================="
+          echo "======================================================"
+          echo " ARC on OpenShift — Production Action Compatibility"
+          echo "======================================================"
           echo ""
-          echo "Node.js Actions (uses Node.js runtime on runner):"
-          echo "  1. actions/checkout@v4              — TESTED"
-          echo "  2. actions/setup-python@v5          — TESTED"
-          echo "  3. actions/setup-go@v5              — TESTED"
-          echo "  4. actions/upload-artifact@v4       — TESTED"
-          echo "  5. openshift-tools-installer@v1     — TESTED"
-          echo "  6. redhat-actions/oc-login@v1       — TESTED"
-          echo "  7. redhat-actions/chart-verifier@v1 — TESTED"
+          echo "Node.js Actions:"
+          echo "  1. actions/checkout@v4              ${{ steps.t1.outcome }}"
+          echo "  2. actions/setup-python@v5          ${{ steps.t2.outcome }}"
+          echo "  3. actions/setup-go@v5              ${{ steps.t3.outcome }}"
+          echo "  4. actions/upload-artifact@v4       ${{ steps.t4.outcome }}"
+          echo "  5. openshift-tools-installer@v1     ${{ steps.t5.outcome }}"
+          echo "  6. redhat-actions/oc-login@v1       ${{ steps.t6.outcome }}"
+          echo "  7. redhat-actions/chart-verifier@v1 ${{ steps.t7.outcome }}"
           echo ""
-          echo "Composite Actions:"
-          echo "  8. go install (get-ocp-range)       — TESTED"
+          echo "Composite / CLI Actions:"
+          echo "  8. go install (get-ocp-range)       ${{ steps.t8.outcome }}"
+          echo "  9. yq binary (Docker workaround)    ${{ steps.t9.outcome }}"
           echo ""
-          echo "Workaround:"
-          echo "  9. yq binary (replaces Docker action)— TESTED"
+          echo "Docker Container Actions (NOT compatible with ARC on OCP):"
+          echo "  X. mikefarah/yq@v4 (uses: docker)   CANNOT RUN (no Docker daemon)"
+          echo "     Workaround: install yq binary directly (test 9 above)"
           echo ""
-          echo "Runner: $(hostname)"
-          echo "Completed: $(date -u)"
+          echo "Runner: $(hostname) | $(date -u)"

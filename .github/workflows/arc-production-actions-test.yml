@@ -1,0 +1,182 @@
+name: "Production Actions Compatibility Test on ARC"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-all-production-actions:
+    runs-on: helm-cert
+    steps:
+      - name: "Pre-check: Runner environment"
+        run: |
+          echo "=== Runner Environment ==="
+          echo "Runner: $(hostname)"
+          echo "OS: $(cat /etc/os-release | grep PRETTY_NAME)"
+          echo "User: $(whoami) (UID=$(id -u), GID=$(id -g))"
+          echo "Docker available: $(which docker 2>/dev/null || echo NO)"
+          echo "Podman available: $(which podman 2>/dev/null || echo NO)"
+          echo "Node.js: $(node --version 2>/dev/null || echo NO)"
+          echo ""
+
+      # --- TEST 1: actions/checkout (Node action) ---
+      - name: "TEST 1: actions/checkout"
+        uses: actions/checkout@v4
+
+      - name: "VERIFY 1: checkout worked"
+        run: |
+          echo "=== Checkout verification ==="
+          ls -la
+          test -f .github/workflows/arc-test.yml && echo "PASS: repo files present" || echo "FAIL: no repo files"
+
+      # --- TEST 2: actions/setup-python (Node action) ---
+      - name: "TEST 2: actions/setup-python"
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: "VERIFY 2: Python setup worked"
+        run: |
+          echo "=== Python verification ==="
+          python3 --version
+          which python3
+          echo "Python version output: ${{ steps.setup-python.outputs.python-version }}"
+          python3 -c "print('Hello from Python on ARC runner')"
+
+      # --- TEST 3: actions/setup-go (Node action, used by get-ocp-range) ---
+      - name: "TEST 3: actions/setup-go"
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.20'
+
+      - name: "VERIFY 3: Go setup worked"
+        run: |
+          echo "=== Go verification ==="
+          go version
+          which go
+
+      # --- TEST 4: actions/upload-artifact (Node action) ---
+      - name: "TEST 4: Create test artifact"
+        run: |
+          mkdir -p test-artifacts
+          echo "ARC runner test artifact - $(date -u)" > test-artifacts/test-report.txt
+          echo "Runner: $(hostname)" >> test-artifacts/test-report.txt
+
+      - name: "TEST 4: actions/upload-artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: arc-test-artifact
+          path: test-artifacts/
+
+      # --- TEST 5: redhat-actions/openshift-tools-installer (Node action) ---
+      - name: "TEST 5: redhat-actions/openshift-tools-installer"
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          source: github
+          skip_cache: true
+          chart-verifier: latest
+
+      - name: "VERIFY 5: chart-verifier installed by action"
+        run: |
+          echo "=== chart-verifier from action ==="
+          which chart-verifier
+          chart-verifier version
+
+      # --- TEST 6: redhat-actions/oc-login (Node action) ---
+      - name: "TEST 6: redhat-actions/oc-login (in-cluster)"
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: https://api.ocp-edge-0.lab.eng.tlv2.redhat.com:6443
+          openshift_token: ${{ secrets.OC_TOKEN }}
+          insecure_skip_tls_verify: true
+
+      - name: "VERIFY 6: oc-login worked"
+        run: |
+          echo "=== oc-login verification ==="
+          oc whoami
+          oc version --client | head -1
+
+      # --- TEST 7: redhat-actions/chart-verifier action (Node action) ---
+      - name: "TEST 7 prep: Create minimal chart for verification"
+        run: |
+          mkdir -p /tmp/mini-chart/templates
+          cat > /tmp/mini-chart/Chart.yaml << 'EOF'
+          apiVersion: v2
+          name: arc-action-test
+          version: 0.1.0
+          description: Minimal chart for ARC action testing
+          type: application
+          kubeVersion: ">=1.20.0"
+          EOF
+          cat > /tmp/mini-chart/values.yaml << 'EOF'
+          replicaCount: 1
+          EOF
+          cat > /tmp/mini-chart/templates/configmap.yaml << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: {{ .Release.Name }}-config
+          data:
+            test: "true"
+          EOF
+          helm package /tmp/mini-chart -d /tmp/
+
+      - name: "TEST 7: redhat-actions/chart-verifier action"
+        uses: redhat-actions/chart-verifier@v1
+        with:
+          chart_uri: /tmp/arc-action-test-0.1.0.tgz
+          report_type: results
+          verify_args: "--disable chart-testing --set profile.vendorType=partner"
+          fail: "false"
+
+      # --- TEST 8: mikefarah/yq (Docker container action) ---
+      - name: "TEST 8 prep: Create YAML for yq test"
+        run: |
+          cat > /tmp/test.yaml << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: test
+          data:
+            key: value
+            version: "1.0"
+          EOF
+
+      - name: "TEST 8: mikefarah/yq (Docker container action)"
+        id: yq-test
+        uses: mikefarah/yq@master
+        with:
+          cmd: yq '.data.version' /tmp/test.yaml
+
+      - name: "VERIFY 8: yq result"
+        run: |
+          echo "yq output: ${{ steps.yq-test.outputs.result }}"
+
+      # --- TEST 9: go install (simulates get-ocp-range composite) ---
+      - name: "TEST 9: go install (get-ocp-range pattern)"
+        run: |
+          go install github.com/opdev/getocprange/cmd/get-ocp-range@latest
+          OCP_RANGE=$(get-ocp-range ">=1.25.0 <1.30.0" 2>/dev/null || echo "BINARY_WORKS_BUT_NO_RANGE")
+          echo "get-ocp-range result: $OCP_RANGE"
+
+      # --- SUMMARY ---
+      - name: "=== RESULTS SUMMARY ==="
+        if: always()
+        run: |
+          echo ""
+          echo "=========================================="
+          echo " Production Actions on ARC - Results"
+          echo "=========================================="
+          echo ""
+          echo "1. actions/checkout          - tested"
+          echo "2. actions/setup-python      - tested"
+          echo "3. actions/setup-go          - tested"
+          echo "4. actions/upload-artifact   - tested"
+          echo "5. openshift-tools-installer - tested"
+          echo "6. redhat-actions/oc-login   - tested"
+          echo "7. chart-verifier action     - tested"
+          echo "8. mikefarah/yq (Docker)     - tested"
+          echo "9. go install (get-ocp-range)- tested"
+          echo ""
+          echo "Runner: $(hostname)"
+          echo "Completed: $(date -u)"

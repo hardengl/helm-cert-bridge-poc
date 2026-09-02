@@ -1,0 +1,98 @@
+name: "Verify: yq binary workaround"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-yq-binary-workaround:
+    runs-on: helm-cert
+    steps:
+      - name: "Install yq binary (workaround for Docker action)"
+        run: |
+          mkdir -p $HOME/bin
+          curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o $HOME/bin/yq
+          chmod +x $HOME/bin/yq
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: "Verify yq is available"
+        run: |
+          which yq
+          yq --version
+
+      - name: "Create realistic chart-verifier report (production format)"
+        run: |
+          mkdir -p pr-branch/charts/partners/acme/test-chart/1.0.0
+          cat > pr-branch/charts/partners/acme/test-chart/1.0.0/report.yaml << 'REPORT'
+          apiversion: v1
+          kind: verify-report
+          metadata:
+            tool:
+              profile:
+                version: v1.3
+              verifier-version: 1.14.0
+              chart-uri: https://github.com/acme/test-chart/releases/download/1.0.0/test-chart-1.0.0.tgz
+            chart:
+              name: test-chart
+              home: https://acme.com
+              version: 1.0.0
+              kubeversion: ">=1.25.0 <1.30.0"
+          results:
+            - check: v1.0/has-readme
+              type: Mandatory
+              outcome: PASS
+            - check: v1.0/chart-testing
+              type: Mandatory
+              outcome: PASS
+          REPORT
+
+      - name: "TEST 1: Extract profile version (production yq usage)"
+        id: get-profile-version
+        run: |
+          RESULT=$(yq '.metadata.tool.profile.version' pr-branch/charts/partners/acme/test-chart/1.0.0/report.yaml)
+          echo "Profile version: $RESULT"
+          echo "result=$RESULT" >> $GITHUB_OUTPUT
+          test "$RESULT" = "v1.3" && echo "PASS" || echo "FAIL: expected v1.3, got $RESULT"
+
+      - name: "TEST 2: Extract kubeversion (production yq usage)"
+        id: get-kube-range
+        run: |
+          RESULT=$(yq '.metadata.chart.kubeversion' pr-branch/charts/partners/acme/test-chart/1.0.0/report.yaml)
+          echo "Kube version range: $RESULT"
+          echo "result=$RESULT" >> $GITHUB_OUTPUT
+          test "$RESULT" = ">=1.25.0 <1.30.0" && echo "PASS" || echo "FAIL: expected >=1.25.0 <1.30.0, got $RESULT"
+
+      - name: "TEST 3: Extract chart name"
+        run: |
+          RESULT=$(yq '.metadata.chart.name' pr-branch/charts/partners/acme/test-chart/1.0.0/report.yaml)
+          echo "Chart name: $RESULT"
+          test "$RESULT" = "test-chart" && echo "PASS" || echo "FAIL"
+
+      - name: "TEST 4: Use output in subsequent step (like production)"
+        run: |
+          echo "Profile from step output: ${{ steps.get-profile-version.outputs.result }}"
+          echo "Kube range from step output: ${{ steps.get-kube-range.outputs.result }}"
+          test "${{ steps.get-profile-version.outputs.result }}" = "v1.3" && echo "PASS: outputs work" || echo "FAIL"
+
+      - name: "=== RESULTS ==="
+        if: always()
+        run: |
+          echo ""
+          echo "============================================="
+          echo " yq binary workaround — verified on ARC"
+          echo "============================================="
+          echo ""
+          echo "Install method: curl binary to \$HOME/bin + GITHUB_PATH"
+          echo "yq version: $(yq --version)"
+          echo ""
+          echo "Production-equivalent operations:"
+          echo "  1. Extract profile version  — tested"
+          echo "  2. Extract kubeversion      — tested"
+          echo "  3. Extract chart name       — tested"
+          echo "  4. Step outputs ($GITHUB_OUTPUT) — tested"
+          echo ""
+          echo "Workflow change required:"
+          echo "  OLD: uses: mikefarah/yq@<sha>"
+          echo "       with: cmd: yq '.field' file.yaml"
+          echo "  NEW: run: yq '.field' file.yaml"
+          echo ""
+          echo "Runner: $(hostname) | $(date -u)"

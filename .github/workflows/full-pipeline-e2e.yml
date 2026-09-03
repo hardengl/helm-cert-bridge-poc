@@ -1,0 +1,358 @@
+name: "Full Pipeline E2E: Production Mirror"
+
+# Mirrors the production build.yml structure:
+#   setup → validate-submission → chart-verifier → manage-gh-pr → release
+# Jobs 1,2,4,5 run on ubuntu (GH-hosted), job 3 runs on helm-cert (ARC on OCP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: "Which path to test"
+        required: true
+        type: choice
+        options:
+          - "chart-with-cluster"
+          - "report-only"
+          - "both"
+        default: "both"
+      concurrency_id:
+        description: "ID for concurrent run tracking"
+        required: false
+        default: "single"
+
+env:
+  SUBMISSION_ARTIFACT_NAME: "submission-info-${{ github.run_id }}"
+
+jobs:
+  # ============================================================
+  # JOB 1: setup (GH-hosted, mirrors production)
+  # ============================================================
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      run_build: "true"
+      cluster_needed: ${{ steps.determine.outputs.cluster_needed }}
+      report_provided: ${{ steps.determine.outputs.report_provided }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine verify requirements
+        id: determine
+        run: |
+          TEST_PATH="${{ inputs.test_path }}"
+          if [[ "$TEST_PATH" == "chart-with-cluster" ]]; then
+            echo "cluster_needed=true" >> $GITHUB_OUTPUT
+            echo "report_provided=false" >> $GITHUB_OUTPUT
+          elif [[ "$TEST_PATH" == "report-only" ]]; then
+            echo "cluster_needed=false" >> $GITHUB_OUTPUT
+            echo "report_provided=true" >> $GITHUB_OUTPUT
+          else
+            echo "cluster_needed=true" >> $GITHUB_OUTPUT
+            echo "report_provided=true" >> $GITHUB_OUTPUT
+          fi
+          echo "Setup complete for path: $TEST_PATH"
+
+  # ============================================================
+  # JOB 2: validate-submission (GH-hosted, mirrors production)
+  # ============================================================
+  validate-submission:
+    runs-on: ubuntu-latest
+    needs: [setup]
+    outputs:
+      chart_entry_name: "partners/hashicorp/vault/0.17.0"
+      release_tag: "hashicorp-vault-0.17.0"
+      vendor_type: "partner"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create submission artifact (mirrors production)
+        run: |
+          mkdir -p submission-info
+          echo "chart_entry_name=partners/hashicorp/vault/0.17.0" > submission-info/submission.env
+          echo "release_tag=hashicorp-vault-0.17.0" >> submission-info/submission.env
+          echo "vendor_type=partner" >> submission-info/submission.env
+          echo "run_id=${{ github.run_id }}" >> submission-info/submission.env
+          echo "concurrency_id=${{ inputs.concurrency_id }}" >> submission-info/submission.env
+          echo "Submission artifact created"
+
+      - name: Upload submission artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SUBMISSION_ARTIFACT_NAME }}
+          path: submission-info/
+
+  # ============================================================
+  # JOB 3: chart-verifier (ARC on OCP — the key job)
+  # ============================================================
+  chart-verifier:
+    runs-on: helm-cert
+    needs: [setup, validate-submission]
+    outputs:
+      report_content: ${{ steps.check_report.outputs.report_content }}
+      ocp_version_range: ${{ steps.get-ocp-range.outputs.result }}
+      run_verifier_outcome: ${{ steps.run-verifier.outcome }}
+      check_report_outcome: ${{ steps.check_report.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download submission artifact (cross-runner artifact passing)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SUBMISSION_ARTIFACT_NAME }}
+          path: submission-info/
+
+      - name: Verify artifact was received from GH-hosted runner
+        run: |
+          echo "=== Artifact from GH-hosted validate-submission job ==="
+          cat submission-info/submission.env
+          source submission-info/submission.env
+          echo "Chart: $chart_entry_name"
+          echo "Concurrency: $concurrency_id"
+          echo "PASS: Artifact received on ARC runner from GH-hosted job"
+
+      # --- PATH A: Cluster needed (chart source submission) ---
+      - name: Install yq binary (production workaround)
+        run: |
+          mkdir -p $HOME/bin
+          curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o $HOME/bin/yq
+          chmod +x $HOME/bin/yq
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Install chart-verifier
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          source: github
+          skip_cache: true
+          chart-verifier: latest
+
+      - name: OC Login (cluster path)
+        if: ${{ needs.setup.outputs.cluster_needed == 'true' }}
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: https://192.168.31.5:6443
+          openshift_token: ${{ secrets.OC_TOKEN }}
+          insecure_skip_tls_verify: true
+
+      - name: Create namespace with sa-for-chart-testing (cluster path)
+        id: create_ns
+        if: ${{ needs.setup.outputs.cluster_needed == 'true' }}
+        run: |
+          NS_NAME="charts-e2e-${{ github.run_id }}"
+          echo "Creating namespace: $NS_NAME"
+          oc new-project "$NS_NAME" --skip-config-write 2>/dev/null || oc project "$NS_NAME"
+          echo "namespace=$NS_NAME" >> $GITHUB_OUTPUT
+          echo "delete_namespace=true" >> $GITHUB_OUTPUT
+          echo "PASS: Namespace created on cluster from ARC runner"
+
+      - name: Create test chart for verification
+        run: |
+          mkdir -p /tmp/test-chart/templates
+          cat > /tmp/test-chart/Chart.yaml << 'EOF'
+          apiVersion: v2
+          name: vault
+          version: 0.17.0
+          description: HashiCorp Vault - E2E pipeline test
+          type: application
+          kubeVersion: ">=1.25.0"
+          home: https://www.vaultproject.io
+          EOF
+          cat > /tmp/test-chart/values.yaml << 'EOF'
+          replicaCount: 1
+          image:
+            repository: vault
+            tag: 1.12.0
+          EOF
+          cat > /tmp/test-chart/README.md << 'EOF'
+          # Vault Helm Chart
+          E2E test chart for full pipeline verification.
+          EOF
+          cat > /tmp/test-chart/templates/configmap.yaml << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: {{ .Release.Name }}-config
+          data:
+            initialized: "true"
+          EOF
+          helm package /tmp/test-chart -d /tmp/
+          echo "Chart packaged: $(ls /tmp/vault-*.tgz)"
+
+      - name: Run chart-verifier (cluster path)
+        id: run-verifier
+        if: ${{ needs.setup.outputs.cluster_needed == 'true' }}
+        uses: redhat-actions/chart-verifier@v1
+        with:
+          chart_uri: /tmp/vault-0.17.0.tgz
+          report_type: results
+          verify_args: "--disable chart-testing --set profile.vendorType=partner"
+          fail: "false"
+
+      - name: Check Report (production equivalent)
+        id: check_report
+        run: |
+          # Simulate production check_report.py behavior
+          if [ -f chartverifier/report.yaml ]; then
+            echo "=== Report from chart-verifier action ==="
+            cat chartverifier/report.yaml | head -30
+            echo "report_content=generated" >> $GITHUB_OUTPUT
+            echo "PASS: Report generated via chart-verifier action"
+          else
+            echo "report_content=skipped" >> $GITHUB_OUTPUT
+            echo "INFO: No report (report-only path or chart-verifier skipped)"
+          fi
+
+      # --- PATH B: Report-only (no cluster needed) ---
+      - name: Create mock user-provided report (report-only path)
+        if: ${{ needs.setup.outputs.report_provided == 'true' }}
+        run: |
+          mkdir -p pr-branch/charts/partners/hashicorp/vault/0.17.0
+          cat > pr-branch/charts/partners/hashicorp/vault/0.17.0/report.yaml << 'REPORT'
+          apiversion: v1
+          kind: verify-report
+          metadata:
+            tool:
+              profile:
+                version: v1.3
+              verifier-version: 1.14.0
+              chart-uri: https://github.com/hashicorp/vault-helm/archive/v0.17.0.tar.gz
+            chart:
+              name: vault
+              home: https://www.vaultproject.io
+              version: 0.17.0
+              kubeversion: ">=1.25.0 <1.31.0"
+          results:
+            - check: v1.0/has-readme
+              type: Mandatory
+              outcome: PASS
+            - check: v1.0/is-helm-v3
+              type: Mandatory
+              outcome: PASS
+            - check: v1.0/chart-testing
+              type: Mandatory
+              outcome: PASS
+          REPORT
+
+      - name: "Extract profile version (yq — production equivalent)"
+        id: get-profile-version
+        if: ${{ needs.setup.outputs.report_provided == 'true' }}
+        run: |
+          RESULT=$(yq '.metadata.tool.profile.version' pr-branch/charts/partners/hashicorp/vault/0.17.0/report.yaml)
+          echo "Profile version: $RESULT"
+          echo "result=$RESULT" >> $GITHUB_OUTPUT
+
+      - name: "Extract kubeversion (yq — production equivalent)"
+        id: get-kube-range
+        if: ${{ needs.setup.outputs.report_provided == 'true' }}
+        run: |
+          RESULT=$(yq '.metadata.chart.kubeversion' pr-branch/charts/partners/hashicorp/vault/0.17.0/report.yaml)
+          echo "Kube range: $RESULT"
+          echo "result=$RESULT" >> $GITHUB_OUTPUT
+
+      - name: "Get OCP version range (production equivalent)"
+        id: get-ocp-range
+        if: ${{ needs.setup.outputs.report_provided == 'true' }}
+        continue-on-error: true
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.20'
+
+      - name: "Compute OCP range"
+        id: compute-ocp-range
+        if: ${{ needs.setup.outputs.report_provided == 'true' }}
+        continue-on-error: true
+        run: |
+          go install github.com/opdev/getocprange/cmd/get-ocp-range@latest
+          export PATH=$PATH:$(go env GOPATH)/bin
+          KUBE_RANGE="${{ steps.get-kube-range.outputs.result }}"
+          OCP_RANGE=$(get-ocp-range "$KUBE_RANGE" 2>/dev/null || echo "computed-from-kube-range")
+          echo "OCP range: $OCP_RANGE"
+          echo "result=$OCP_RANGE" >> $GITHUB_OUTPUT
+
+      - name: Upload report errors artifact (production equivalent)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chart_report_errors
+          path: |
+            chartverifier/
+            pr-branch/
+          if-no-files-found: ignore
+
+      - name: Delete namespace (cleanup)
+        if: ${{ always() && steps.create_ns.outputs.delete_namespace == 'true' }}
+        run: |
+          NS="${{ steps.create_ns.outputs.namespace }}"
+          echo "Deleting namespace: $NS"
+          oc delete project "$NS" --wait=false 2>/dev/null || echo "Namespace already deleted"
+
+  # ============================================================
+  # JOB 4: manage-gh-pr (GH-hosted, mirrors production)
+  # ============================================================
+  manage-gh-pr:
+    runs-on: ubuntu-latest
+    needs: [setup, validate-submission, chart-verifier]
+    if: ${{ always() && needs.setup.result == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download submission artifact (from validate-submission)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SUBMISSION_ARTIFACT_NAME }}
+          path: submission-info/
+
+      - name: Download report errors (from chart-verifier on ARC)
+        uses: actions/download-artifact@v4
+        with:
+          name: chart_report_errors
+          path: report-errors/
+        continue-on-error: true
+
+      - name: Process results (production equivalent)
+        run: |
+          echo "=== manage-gh-pr: Processing results from all jobs ==="
+          echo ""
+          echo "--- Submission info (from validate-submission, GH-hosted) ---"
+          cat submission-info/submission.env
+          echo ""
+          echo "--- Report errors (from chart-verifier, ARC runner) ---"
+          ls -la report-errors/ 2>/dev/null || echo "No errors"
+          echo ""
+          echo "--- Job outcomes ---"
+          echo "  setup: ${{ needs.setup.result }}"
+          echo "  validate-submission: ${{ needs.validate-submission.result }}"
+          echo "  chart-verifier: ${{ needs.chart-verifier.result }}"
+          echo "  chart-verifier report_content: ${{ needs.chart-verifier.outputs.report_content }}"
+          echo "  chart-verifier ocp_range: ${{ needs.chart-verifier.outputs.ocp_version_range }}"
+          echo ""
+          echo "PASS: GH-hosted job successfully consumed artifacts + outputs from ARC runner job"
+
+  # ============================================================
+  # JOB 5: release (GH-hosted, mirrors production)
+  # ============================================================
+  release:
+    runs-on: ubuntu-latest
+    needs: [setup, validate-submission, chart-verifier, manage-gh-pr]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Simulate release (production equivalent)
+        run: |
+          echo "=== release: Final job ==="
+          echo ""
+          echo "Would release chart: ${{ needs.validate-submission.outputs.chart_entry_name }}"
+          echo "Release tag: ${{ needs.validate-submission.outputs.release_tag }}"
+          echo "Vendor type: ${{ needs.validate-submission.outputs.vendor_type }}"
+          echo "Verifier outcome: ${{ needs.chart-verifier.outputs.run_verifier_outcome }}"
+          echo "Report check: ${{ needs.chart-verifier.outputs.check_report_outcome }}"
+          echo ""
+          echo "Full pipeline completed:"
+          echo "  1. setup (GH-hosted)             → ${{ needs.setup.result }}"
+          echo "  2. validate-submission (GH-hosted)→ ${{ needs.validate-submission.result }}"
+          echo "  3. chart-verifier (ARC on OCP)    → ${{ needs.chart-verifier.result }}"
+          echo "  4. manage-gh-pr (GH-hosted)       → ${{ needs.manage-gh-pr.result }}"
+          echo "  5. release (GH-hosted)            → running"
+          echo ""
+          echo "Concurrency ID: ${{ inputs.concurrency_id }}"
+          echo "PASS: Full 5-job pipeline completed successfully"

@@ -86,7 +86,7 @@ jobs:
   # JOB 3: chart-verifier (ARC on OCP — the key job)
   # ============================================================
   chart-verifier:
-    runs-on: helm-cert
+    runs-on: helm-cert-bm
     needs: [setup, validate-submission]
     outputs:
       report_content: ${{ steps.check_report.outputs.report_content }}
@@ -130,8 +130,8 @@ jobs:
         if: ${{ needs.setup.outputs.cluster_needed == 'true' }}
         uses: redhat-actions/oc-login@v1
         with:
-          openshift_server_url: https://192.168.31.5:6443
-          openshift_token: ${{ secrets.OC_TOKEN }}
+          openshift_server_url: https://api.kni-qe-64.ecosys.eng.rdu2.dc.redhat.com:6443
+          openshift_token: ${{ secrets.OC_TOKEN_BM }}
           insecure_skip_tls_verify: true
 
       - name: Create namespace with sa-for-chart-testing (cluster path)

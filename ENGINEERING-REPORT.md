@@ -33,7 +33,7 @@ Deploy GitHub Actions Runner Controller (ARC) on a production-representative bar
 
 2. **Runner Scale Set** (`helm-cert-bm`) in namespace `helm-cert-runners`
    - Ephemeral runner pods: 0 at idle, scales to N on demand
-   - maxRunners: 80
+   - maxRunners: 100
    - Runner image: `quay.io/gharden/helm-cert-arc-runner:v1.0.0`
    - Each runner pod runs one GitHub Actions job, then terminates
 
@@ -47,7 +47,8 @@ Deploy GitHub Actions Runner Controller (ARC) on a production-representative bar
 | Scale test (smoke) | 5 | 5/5 PASS | 79s | [35129768216](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35129768216) |
 | Scale test | 40 | 40/40 PASS | 53s | [35129963634](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35129963634) |
 | Scale test | 60 | 60/60 PASS | 69s | [35130184922](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35130184922) |
-| Scale test (max) | 80 | 80/80 PASS | 109s | [35130448035](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35130448035) |
+| Scale test | 80 | 80/80 PASS | 109s | [35130448035](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35130448035) |
+| **Scale test (ceiling)** | **100** | **100/100 PASS** | **110s** | [35137429012](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35137429012) |
 | Manifest redeploy smoke | 5 | 5/5 PASS | ~79s | [35133796132](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35133796132) |
 | Full pipeline E2E (5-job) | 1 | 5/5 jobs PASS | ~2min | [35134087716](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35134087716) |
 
@@ -110,18 +111,18 @@ All other actions (checkout, setup-python, setup-go, upload-artifact, download-a
 
 ### Hardware Limits (Observed)
 
-| Metric | At 80 concurrent | Notes |
-|---|---|---|
-| Peak CPU (single node) | 89% | All pods scheduled to hp-e910-02 (scheduler imbalance) |
-| Peak CPU (other nodes) | 5-10% | Barely used |
-| Peak memory | 35% max | Memory is not the bottleneck |
-| Wall time | 109s | Includes GH overhead (matrix generation, summary job) |
+| Metric | At 80 concurrent | At 100 concurrent (ceiling) | Notes |
+|---|---|---|---|
+| Peak CPU (single node) | 89% | 70% | hp-e910-02 (scheduler imbalance) |
+| Peak CPU (other nodes) | 5-10% | 3-11% | Barely used |
+| Peak memory | 35% max | 40% max | Memory is not the bottleneck |
+| Wall time | 109s | 110s | Includes GH overhead (matrix generation, summary job) |
 
 ### Capacity Estimate
-- **Current limit**: 80 concurrent (set by `maxRunners`, not hardware)
-- **Observed ceiling**: ~80 on a single node before CPU saturation
-- **With pod spreading** (topology spread constraints or anti-affinity): estimated 120-150 concurrent across all 3 nodes
-- **Memory**: not a constraint at any tested level
+- **Tested ceiling**: 100 concurrent — 100% pass, 110s wall, 70% peak CPU on one node
+- **Observed limit**: single-node scheduling means all pods land on hp-e910-02; at 100 concurrent, CPU peaked at 70% (lower than the 89% at 80 due to batch timing)
+- **With pod spreading** (topology spread constraints or anti-affinity): estimated 150-200+ concurrent across all 3 nodes
+- **Memory**: not a constraint at any tested level (max 40%)
 
 ### Software Limits
 
@@ -216,8 +217,8 @@ hardengl/helm-cert-bridge-poc/
 | Topology | 3-node compact (VMs) | 3-node compact (bare metal) |
 | CPU per node | 17.5 cores | 47.5 cores |
 | RAM per node | 38 GiB | 95 GiB |
-| Max tested concurrent | 20 | 80 |
-| Max concurrent result | 30s wall, 100% pass | 109s wall, 100% pass |
+| Max tested concurrent | 20 | 100 |
+| Max concurrent result | 30s wall, 100% pass | 110s wall, 100% pass |
 | Peak CPU at max | 58% (one node) | 89% (one node) |
 | Idle CPU | 3-5% | 2-6% |
 

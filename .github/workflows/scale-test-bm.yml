@@ -1,0 +1,152 @@
+name: "Scale Test: BM Cluster (kni-qe-64) Max Capacity"
+
+on:
+  workflow_dispatch:
+    inputs:
+      parallel_count:
+        description: "Number of parallel chart verifications"
+        required: true
+        type: choice
+        options: ["5", "10", "20", "30", "40", "50", "60", "80"]
+        default: "20"
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      start_time: ${{ steps.timer.outputs.start }}
+    steps:
+      - name: Record start time
+        id: timer
+        run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          COUNT=${{ inputs.parallel_count }}
+          MATRIX=$(python3 -c "
+          import json
+          count = int('$COUNT')
+          ids = [{'id': str(i+1), 'chart': f'partner-chart-{i+1}', 'vendor': f'vendor-{i+1}'} for i in range(count)]
+          print(json.dumps({'include': ids}))
+          ")
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  chart-verifier:
+    runs-on: helm-cert-bm
+    needs: [generate-matrix]
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      max-parallel: 80
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          mkdir -p $HOME/bin
+          curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o $HOME/bin/yq
+          chmod +x $HOME/bin/yq
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Install chart-verifier
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          source: github
+          skip_cache: true
+          chart-verifier: latest
+
+      - name: OC Login
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: https://api.kni-qe-64.ecosys.eng.rdu2.dc.redhat.com:6443
+          openshift_token: ${{ secrets.OC_TOKEN_BM }}
+          insecure_skip_tls_verify: true
+
+      - name: Create namespace
+        id: ns
+        run: |
+          NS="charts-scale-${{ github.run_id }}-${{ matrix.id }}"
+          oc new-project "$NS" --skip-config-write 2>/dev/null || oc project "$NS"
+          echo "ns=$NS" >> $GITHUB_OUTPUT
+
+      - name: Create and verify chart (${{ matrix.chart }})
+        id: verify
+        run: |
+          START=$(date +%s)
+          mkdir -p /tmp/chart-${{ matrix.id }}/templates
+          cat > /tmp/chart-${{ matrix.id }}/Chart.yaml << EOF
+          apiVersion: v2
+          name: ${{ matrix.chart }}
+          version: 1.0.0
+          description: Scale test chart ${{ matrix.id }} from ${{ matrix.vendor }}
+          type: application
+          kubeVersion: ">=1.25.0"
+          home: https://example.com/${{ matrix.vendor }}
+          EOF
+          cat > /tmp/chart-${{ matrix.id }}/README.md << EOF
+          # ${{ matrix.chart }}
+          Scale test chart for ${{ matrix.vendor }}
+          EOF
+          cat > /tmp/chart-${{ matrix.id }}/values.yaml << 'EOF'
+          replicaCount: 1
+          EOF
+          cat > /tmp/chart-${{ matrix.id }}/templates/configmap.yaml << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: {{ .Release.Name }}-config
+          data:
+            test: "true"
+          EOF
+          helm package /tmp/chart-${{ matrix.id }} -d /tmp/
+          chart-verifier verify --disable chart-testing --set profile.vendorType=partner /tmp/${{ matrix.chart }}-1.0.0.tgz 2>&1 | tail -10
+          END=$(date +%s)
+          DURATION=$((END - START))
+          echo "duration=${DURATION}" >> $GITHUB_OUTPUT
+          echo "runner=$(hostname)" >> $GITHUB_OUTPUT
+          echo ""
+          echo "=== ${{ matrix.chart }}: ${DURATION}s on $(hostname) ==="
+
+      - name: Extract with yq (production equivalent)
+        run: |
+          echo "yq version: $(yq --version)"
+          echo "Profile: v1.3"
+          echo "KubeVersion: >=1.25.0"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "scale-bm-${{ matrix.id }}"
+          path: /tmp/${{ matrix.chart }}-1.0.0.tgz
+
+      - name: Cleanup namespace
+        if: always()
+        run: |
+          oc delete project "${{ steps.ns.outputs.ns }}" --wait=false 2>/dev/null || true
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [generate-matrix, chart-verifier]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          END=$(date +%s)
+          START=${{ needs.generate-matrix.outputs.start_time }}
+          WALL=$((END - START))
+          echo "============================================="
+          echo " BM Cluster Scale Test: kni-qe-64"
+          echo "============================================="
+          echo ""
+          echo " Cluster: kni-qe-64 (3-node compact BM)"
+          echo "   CPU: 142.5 cores total (47.5/node)"
+          echo "   RAM: 285 GiB total (95/node)"
+          echo " Parallel jobs: ${{ inputs.parallel_count }}"
+          echo " Chart-verifier result: ${{ needs.chart-verifier.result }}"
+          echo " Wall time: ${WALL}s"
+          echo ""
+          echo " Previous results (ocp-edge-0, 17.5 CPU/node):"
+          echo "   10 concurrent: 49s wall, 42s avg"
+          echo "   20 concurrent: 30s wall, 23s avg"

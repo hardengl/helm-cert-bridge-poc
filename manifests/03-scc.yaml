@@ -1,0 +1,24 @@
+---
+# On OpenShift 4.x, runner pods need to run as UID 1001 (GitHub Actions runner user).
+# The default restricted-v2 SCC only allows UIDs in the namespace-allocated range.
+# This grants anyuid to all service accounts in the runner namespace.
+#
+# NOTE: The PSA "privileged" label on the namespace (in 01-namespaces.yaml) handles
+# Pod Security Admission. This file handles the legacy SCC admission controller.
+#
+# Applied via: oc adm policy add-scc-to-group anyuid system:serviceaccounts:helm-cert-runners
+# Equivalent declarative form:
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: helm-cert-runners-anyuid
+  labels:
+    app.kubernetes.io/part-of: helm-cert-arc
+subjects:
+- kind: Group
+  name: system:serviceaccounts:helm-cert-runners
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid
+  apiGroup: rbac.authorization.k8s.io

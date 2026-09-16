@@ -1,0 +1,25 @@
+---
+# Service account used by runner pods for oc login during chart verification.
+# A long-lived token from this SA is stored as a GitHub Actions secret (OC_TOKEN_BM).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: helm-cert-runner
+  namespace: helm-cert-runners
+  labels:
+    app.kubernetes.io/part-of: helm-cert-arc
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: helm-cert-runner-cluster-admin
+  labels:
+    app.kubernetes.io/part-of: helm-cert-arc
+subjects:
+- kind: ServiceAccount
+  name: helm-cert-runner
+  namespace: helm-cert-runners
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io

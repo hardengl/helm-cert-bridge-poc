@@ -4,7 +4,7 @@
 
 This report documents the end-to-end validation of GitHub Actions Runner Controller (ARC) on bare-metal OpenShift as a replacement for AWS-hosted runners for the Helm chart certification pipeline. Testing was conducted on a 3-node compact OCP 4.18 cluster (kni-qe-64) with 142.5 CPU cores and 285 GiB RAM.
 
-**Key Result**: The full production pipeline (openshift-helm-charts) runs successfully on ARC with only 4 targeted code changes. All non-chart-install behave E2E tests pass. Stress testing confirmed 100 concurrent chart verifications with zero failures.
+**Key Result**: The full production pipeline (openshift-helm-charts) runs successfully on ARC with only 4 targeted code changes. **All 19/19 Behave E2E feature files pass** (100%) — including full chart install/certification/merge/release flows. Stress testing confirmed 100 concurrent chart verifications with zero failures.
 
 ## What Was Deployed
 
@@ -124,46 +124,61 @@ Each PR got its own dedicated ARC runner pod. All processed correctly. Scale-to-
 - Created `dev-gh-pages` branch with `index.yaml` and `unpublished-certified-charts.yaml`
 - Created `run-behave-tests.yml` workflow dispatch for manual triggering
 
-### Results: 12/19 Feature Files Pass (63%)
+### Results: 19/19 Feature Files Pass (100%)
 
-**Passing (12/19):**
+[Run 35171804948](https://github.com/hardengl/openshift-helm-charts-dev/actions/runs/35171804948) — overall conclusion: **success**.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
+| HC-01 | Chart src without report | ✅ PASS |
+| HC-02 | Chart tar without report | ✅ PASS |
 | HC-03 | Chart verifier comes back with failures | ✅ PASS |
 | HC-04 | Invalid URL in the report | ✅ PASS |
 | HC-05 | PR includes a file which is not chart related | ✅ PASS |
+| HC-06 | Provider delivery control | ✅ PASS |
+| HC-07 | Report and chart src | ✅ PASS |
+| HC-08 | Report and chart tar | ✅ PASS |
 | HC-09 | Report in JSON format | ✅ PASS |
+| HC-10 | Signed chart | ✅ PASS |
 | HC-11 | Report with missing checks | ✅ PASS |
+| HC-12 | Report without chart | ✅ PASS |
 | HC-14 | User submits chart with errors | ✅ PASS |
 | HC-15 | Check submitted charts | ✅ PASS |
-| HC-16 | Chart test takes more than 30 mins | ✅ PASS |
+| HC-16 | Chart test takes more than 30 mins | ✅ PASS (~1h40m runtime, by design) |
 | HC-17 | Dash in version | ✅ PASS |
 | HC-18 | Multiple charts in PR | ✅ PASS |
 | HC-19 | Report SHA | ✅ PASS |
 | HC-20 | Owners file | ✅ PASS |
 
-**Failing (7/19) — all require chart-verifier to install a chart on the cluster:**
+### Root Cause of the Original 7 Failures (Corrected)
 
-| Feature | Description | Root Cause |
-|---------|-------------|------------|
-| HC-01 | Chart src without report | chart-verifier install timeout / cert check failures |
-| HC-02 | Chart tar without report | chart-verifier install timeout / cert check failures |
-| HC-06 | Provider delivery control | chart-verifier install timeout |
-| HC-07 | Report and chart src | chart-verifier install timeout / cert check failures |
-| HC-08 | Report and chart tar | chart-verifier install timeout / cert check failures |
-| HC-10 | Signed chart | chart-verifier install timeout + signature verification |
-| HC-12 | Report without chart | chart-verifier expected-pass path fails |
+An earlier pass reported these 7 as failing due to "chart-verifier install timeout / cert check failures" on the target cluster. **That diagnosis was wrong.** Digging into the actual job logs (not just the assertion message) showed:
 
-**Root cause of failures**: These 7 tests submit actual Helm chart source/tarballs that require chart-verifier to install the chart on the OCP cluster. The test charts (e.g., vault-0.17.0) are designed for the production sandbox's specific cluster configuration. On our kni-qe-64 cluster, chart installs either timeout or fail certification checks (image not certified, missing annotations). **These are not ARC infrastructure failures** — the pipeline correctly processes the submissions and returns the correct error results.
+- `chart-verifier` itself was passing 13/13 checks against the real chart (`vault-0.17.0.tgz`) on kni-qe-64 — the cluster-side install/certification worked fine.
+- The actual failure was in the **`Comment and merge PR`** job, at the **`Approve PR`** step: `gh pr review --approve` failed with `GitHub Actions is not permitted to approve pull requests.`
+- The `build.yml` pipeline intentionally uses the built-in `GITHUB_TOKEN` (Actions bot identity) to approve PRs in the sandbox repo, specifically because the PR submitter is also a bot identity and GitHub blocks self-approval. This only works if the repo setting **"Allow GitHub Actions to create and approve pull requests"** is enabled.
+- That repo setting was **off by default** on the fork (`can_approve_pull_request_reviews: false`). It has nothing to do with ARC, self-hosted runners, or bare metal — it would have blocked the identical pipeline on GitHub-hosted runners too.
+
+**Fix applied:**
+
+```bash
+curl -X PUT -H "Authorization: Bearer $TOKEN" \
+  https://api.github.com/repos/hardengl/openshift-helm-charts-dev/actions/permissions/workflow \
+  -d '{"default_workflow_permissions":"write","can_approve_pull_request_reviews":true}'
+```
+
+After this one-line repo setting change, all 7 previously-failing scenarios (HC-01, 02, 06, 07, 08, 10, 12) passed on re-run, confirming the merge/release path — not just chart-verifier — now works end-to-end on ARC.
+
+**Also corrected**: the original "PR #1" full-pipeline demo (arc-test-chart 1.0.0, Phase 2 above) never actually merged, for the same reason — it was masked at the time because that chart intentionally had 4/13 checks fail, so "Release Chart" being skipped looked like the expected/correct outcome. The approve-permission bug was silently present the whole time and only surfaced once a scenario needed a real approve+merge.
 
 ### Improvement from Baseline
 
-| Run | Passed | Failed | Improvement |
-|-----|--------|--------|-------------|
+| Run | Passed | Failed | Notes |
+|-----|--------|--------|-------|
 | Run 1 (before fixes) | 4/19 | 15/19 | Baseline |
 | Run 2 (settings fix) | 5/19 | 14/19 | +1 (HC-20 OWNERS) |
-| Run 3 (gh-pages fix) | 12/19 | 7/19 | +7 (all non-install tests) |
+| Run 3 (gh-pages fix) | 12/19 | 7/19 | +7 (all non-merge tests) |
+| Run 4 (Actions PR-approve permission fix) | **19/19** | **0/19** | +7 (all remaining merge/release tests) — [run 35171804948](https://github.com/hardengl/openshift-helm-charts-dev/actions/runs/35171804948) |
 
 ## ARC Compatibility Summary
 
@@ -205,8 +220,21 @@ All resources are isolated and removable:
 
 No cluster-level resources modified. No existing workloads affected.
 
+## Note on Other Workflows in the Actions Tab
+
+Looking at the fork's Actions tab, several workflows unrelated to the ARC migration also run on every PR and frequently show `skipped` or `failure`. These are **pre-existing repo automation, not part of the chart-certification pipeline being validated**, and they behave identically on GitHub-hosted runners — confirmed by inspecting their logs:
+
+| Workflow | Behavior on fork | Why |
+|----------|-------------------|-----|
+| `Release-Workflow` | Fails at "Check contributor" | Gated on the repo-root `OWNERS` file listing the actor as a maintainer; `hardengl` isn't a listed owner of `openshift-helm-charts/development`. Same result on any non-maintainer fork. Downstream jobs correctly show `skipped`. |
+| `Test Workflow` | Passes | Unrelated repo-scaffolding test, not part of cert pipeline. |
+| `Smoke Test` | Fails at "Remove label on state change" | Tries to remove an `ok-to-test` label that was never applied (this workflow triggers on any label add/remove event); unrelated to build.yml/ARC. |
+| `CI (ARC on kni-qe-64)` steps showing `skipped` for negative-test PRs (bad semver, unauthorized user, etc.) | Expected | `chart-verifier` and `Release Chart` jobs are declared with `needs:`/`if:` conditions that correctly skip once an earlier job (e.g. `validate-submission`) fails — this is the same behavior the real production pipeline has for invalid submissions. |
+
+None of the above are gaps introduced by ARC or bare metal — they are either unrelated legacy workflows or by-design short-circuiting for negative test cases.
+
 ## Conclusion
 
-ARC on bare-metal OCP is a viable, production-ready replacement for AWS-hosted runners. The 4 workflow changes are minimal and well-understood. The 7 behave test failures are chart-content issues, not ARC infrastructure issues. With the production sandbox's specific test charts and cluster configuration, these would pass as they do today.
+ARC on bare-metal OCP is a viable, production-ready replacement for AWS-hosted runners. The 4 workflow changes to `build.yml` are minimal and well-understood. **All 19/19 Behave E2E scenarios now pass**, including full chart install, certification, PR approval, merge, and release flows — end to end, on ARC, on bare metal. The one additional fix required was a repo-level GitHub setting (`can_approve_pull_request_reviews`), unrelated to ARC itself but necessary for the sandbox's bot-approves-bot-PR pattern to work.
 
-**Recommendation**: Proceed with migration. The changes are non-breaking and can be deployed incrementally (chart-verifier job first, others later).
+**Recommendation**: Proceed with migration. The changes are non-breaking and can be deployed incrementally (chart-verifier job first, others later). Ensure the target production repo/org has "Allow GitHub Actions to create and approve pull requests" enabled if the sandbox repo uses the same bot-approval pattern.

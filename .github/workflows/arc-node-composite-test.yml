@@ -76,7 +76,7 @@ jobs:
         with:
           source: github
           skip_cache: true
-          chart-verifier: latest
+          chart-verifier: "1.16.0"
         continue-on-error: true
 
       - name: "VERIFY 5: openshift-tools-installer"
@@ -151,7 +151,7 @@ jobs:
         id: t9
         continue-on-error: true
         run: |
-          curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
+          curl -sL https://github.com/mikefarah/yq/releases/download/v4.53.6/yq_linux_amd64 -o /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
           yq --version
           cat > /tmp/test.yaml << 'EOF'

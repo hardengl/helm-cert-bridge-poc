@@ -74,7 +74,7 @@ jobs:
         with:
           source: github
           skip_cache: true
-          chart-verifier: latest
+          chart-verifier: "1.16.0"
 
       - name: "VERIFY 5: chart-verifier installed by action"
         run: |

@@ -10,7 +10,7 @@ jobs:
       - name: "Install yq binary (workaround for Docker action)"
         run: |
           mkdir -p $HOME/bin
-          curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o $HOME/bin/yq
+          curl -sL https://github.com/mikefarah/yq/releases/download/v4.53.6/yq_linux_amd64 -o $HOME/bin/yq
           chmod +x $HOME/bin/yq
           echo "$HOME/bin" >> $GITHUB_PATH
 

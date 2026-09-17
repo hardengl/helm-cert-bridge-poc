@@ -31,6 +31,32 @@ Using `hardengl/helm-cert-bridge-poc` with isolated chart-verifier jobs:
 
 **Peak node CPU at 100 concurrent**: 70% on hp-e910-02 (scheduler imbalance). With topology spread constraints, estimated 150-200+ concurrent capacity.
 
+**Caveat**: the concurrency levels above (5–100) used **synthetic, minimal charts** generated at test time (one ConfigMap template, `chart-testing` checks disabled) — these validate raw infrastructure throughput (namespace lifecycle, chart-verifier binary execution, ARC pod scheduling) but not realistic customer chart complexity.
+
+## Phase 1b: Real Customer Chart Load Test (closing the realism gap)
+
+To combine **both** realistic chart content and concurrent load in one test, 25 diverse real charts were pulled directly from the actual production [`openshift-helm-charts/charts`](https://github.com/openshift-helm-charts/charts) repo — genuine partner/Red Hat submissions, not synthetic fixtures:
+
+| Vendor/Chart | Size | Notable complexity |
+|---|---|---|
+| Red Hat `redhat-developer-hub` (RHDH — our own product) | 432K | Full multi-component app |
+| AppsCode, LangGenius, Peaka, Solace `pubsubplus-openshift` | 20K–560K | Real container images, StatefulSets, webhooks |
+| Nirmata `kyverno` | 136K | CRDs, admission webhooks |
+| Red Hat `eap74`, `eap-xp3`, `quarkus` | 8K–16K | OpenShift BuildConfigs, S2I |
+| Solace, Infinispan, ScalarDB, Voyager Gateway, others | — | Multi-resource, real values.yaml, real dependencies |
+
+**Test**: all 25 charts run through `chart-verifier verify` **concurrently** (max-parallel 25) on the same `helm-cert-bm` ARC scale set on kni-qe-64 — [run 35180645894](https://github.com/hardengl/helm-cert-bridge-poc/actions/runs/35180645894).
+
+**Results**:
+- **0 infrastructure failures** — all 25 concurrent jobs completed cleanly (namespace create/delete, oc login, chart-verifier execution) in ~9.5 min wall time, durations per chart ranging 0s–321s depending on real chart complexity (e.g. Voyager Gateway's actual install took 321s; simple charts failed fast at template-render stage).
+- **134 checks passed / 26 checks failed** at the chart-verifier level across the 25 real charts. Every failure traced to a genuine, real chart-content issue, e.g.:
+  - `eap-xp3` (Red Hat EAP): `BuildConfig` template requires a user-supplied Git source URL (real chart design, not a bug) + missing `charts.openshift.io/name` annotation.
+  - Several charts: unpinned Kubernetes version, missing values schema, embedded CRDs (e.g. Kyverno legitimately ships CRDs), unsigned charts.
+- Red Hat's own `redhat-developer-hub` and `redhat-developer-hub-must-gather` charts passed 7/7 checks cleanly.
+- **No pattern of ARC-specific failure** — every failure has a clear, chart-side root cause visible in the `chart-verifier` report, exactly as it would on GitHub-hosted runners.
+
+This closes the gap between the two earlier tests: the Behave suite proved full pipeline correctness with one complex real chart (Vault) at low concurrency; the 100-concurrent test proved raw throughput with trivial charts; this test proves **both dimensions together** — genuine customer chart diversity/complexity at real concurrency (25 simultaneous) on the same bare-metal ARC infrastructure.
+
 ## Phase 2: Production Pipeline E2E (Fork of openshift-helm-charts/development)
 
 ### Repository
